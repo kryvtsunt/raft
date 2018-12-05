@@ -1,6 +1,3 @@
-
-
-
 # this class represents a server which can change states, send messages, and respond to mesages
 # consider signal.setitimer()
 
@@ -8,14 +5,14 @@ class Server():
     def __init__(self, ID, neighbors, sock):
         self.ID = ID
         self.sock = sock
-        
+
         self.log = []
         self.neighbors = neighbors
         self.currentTerm = 0
         self.leader = None
 
         self.votedFor = None
-        
+
         self.commitIndex = 0
         self.lastApplied = 0
 
@@ -33,7 +30,7 @@ class Server():
 
     def send_msg(self, msg):
         self.sock.sendall(json.loads(msg))
-        
+
     def getLastLogTerm(self):
         try:
             last = self.log(len(self.log) - 1)
@@ -47,6 +44,3 @@ class Server():
             return last.getIndex()
         except IndexError:
             return 0
-        
-
-        

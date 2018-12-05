@@ -33,7 +33,7 @@ class Raft:
         self.voted_for = None
         self.last = None
         self.election_time = None
-        self.leader_timeout = 2
+        self.leader_timeout = 0.5
         self.election_timeout = random.uniform(0.1, 0.3)
 
         self.commit_index = 0
@@ -70,6 +70,12 @@ class Raft:
                 if msg['type'] == HEARTBEAT:
                     self.leader = msg['src']
                     self.votes = 0
+                    for msg in self.q:
+                        redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
+                                    "MID": msg['MID']}
+                        self.sock.send(json.dumps(redirect))
+                    self.q = []
+
 
 
 
@@ -108,9 +114,12 @@ class Raft:
                                     "MID": msg['MID']}
                         self.sock.send(json.dumps(redirect))
                     else:
+                        # print(msg['MID'])
                         redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.my_id, "type": "redirect",
                                     "MID": msg['MID']}
                         self.sock.send(json.dumps(redirect))
+                        # self.q.append(msg)
+
                 elif msg['type'] == APPEND_REQUEST:
                     self.add_log(msg['content'])
                     respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
@@ -127,10 +136,12 @@ class Raft:
                         self.votes = 0
                         self.next_index = [len(self.log) + 1 for n in self.replica_ids]
                         self.match_index = [0 for n in self.replica_ids]
+                        self.store = {}
+                        self.create_store()
 
             if self.state == LEADER:
                 clock = time.time()
-                if clock - self.last > 1.5:
+                if clock - self.last > .3:
                     for replica in self.replica_ids:
                         msg = {'src': self.my_id, 'dst': replica, 'leader': self.leader, 'type': HEARTBEAT}
                         self.sock.send(json.dumps(msg))
@@ -200,9 +211,13 @@ class Raft:
                         'leader': self.my_id, 'MID': msg['MID'], 'type': 'fail'}
                 self.sock.send(json.dumps(resp))
 
-    def create_stroe(self):
-        for msg in self.log:
-            content = msg['content']
+    def create_store(self):
+        for message in self.log:
+            msg = message['content']
+            if msg['type'] == 'put':
+                self.store[msg['key']] = msg['value']
+
+
 
 
 if __name__ == "__main__":
