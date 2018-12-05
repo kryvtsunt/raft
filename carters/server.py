@@ -35,12 +35,18 @@ class Server():
         self.sock.sendall(json.loads(msg))
         
     def getLastLogTerm(self):
-        last = self.log(len(self.log) - 1)
-        return last.getTerm()
+        try:
+            last = self.log(len(self.log) - 1)
+            return last.getTerm()
+        except IndexError:
+            return 0
 
     def getLastLogIndex(self):
-        last = self.log(len(self.log) - 1)
-        return last.getIndex()
+        try:
+            last = self.log(len(self.log) - 1)
+            return last.getIndex()
+        except IndexError:
+            return 0
         
 
         
