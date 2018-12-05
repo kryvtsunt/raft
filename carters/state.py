@@ -20,18 +20,23 @@ class State():
         self.server = server
 
     def rec_message(self, msg):
-        if message.term > self.server.currentTerm:
-            self.server.currentTerm = message.term
-        elif message.term < self.server.currentTerm:
-            self.resp_message(msg, False)
+        self.resetAlarm()
+        
+        # For now, fail get() and put() from clients
+        if msg['type'] in ['get', 'put']:
+            rsp = {'src':my_id,
+                   'dst':msg['src'],
+                   'leader':None,
+                   'type':'fail',
+                   'MID':msg['MID']}
 
-        if msg.type == APPEND:
+        if msg['type'] == APPEND:
             self.handle_append_entries(msg)
-        elif msg.type == APPEND_RSP:
+        elif msg['type'] == APPEND_RSP:
             self.handle_append_entries_rsp(msg)
-        elif msg.type == VOTE_REQ:
+        elif msg['type'] == VOTE_REQ:
             self.handle_vote_req(msg)
-        elif msg.type == VOTE_REQ_RSP:
+        elif msg['type'] == VOTE_REQ_RSP:
             self.handle_vote_req_rsp(msg)
         else:
             raise RuntimeError("Unexpected message")
@@ -59,6 +64,22 @@ class State():
     # for everyone
     def start(self):
         raise RuntimeError("TODO")
+
+    def candidateLogUpToDate(self, lastLogIndex, lastLogTerm):
+        if self.server.getLastLogTerm() < lastLogTerm:
+            return True
+        elif (self.server.getLastLogTerm() == lastLogTerm) and\
+             (self.server.getLastLogIndex() < lastLogIndex):
+            return True
+        else:
+            return False
+
+    def resetAlarm(self):
+        # turn alarm OFF
+        self.signal.alarm(0)
+
+        # turn alarm ON
+        self.signal.alarm(self.timeout)
 
 
 
