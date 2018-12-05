@@ -200,6 +200,10 @@ class Raft:
                         'leader': self.my_id, 'MID': msg['MID'], 'type': 'fail'}
                 self.sock.send(json.dumps(resp))
 
+    def create_stroe(self):
+        for msg in self.log:
+            content = msg['content']
+
 
 if __name__ == "__main__":
     server = Raft()
