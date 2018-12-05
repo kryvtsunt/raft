@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+
+import sys, socket, select, time, json, random
+
+DEBUG = False
+FOLLOWER = 'follower'
+CANDIDATE = 'candidate'
+LEADER = 'leader'
+
+VOTE_REQUEST = "vote_request"
+VOTE_REJECT = "vote_reject"
+VOTE_APPROVE = "vote_aapprove"
+APPEND_REQUEST = "append_request"
+APPEND_APPROVE = "append_approve"
+HEARTBEAT = "heartbeat"
+
+
+class Raft:
+    def __init__(self):
+        # ids
+        self.my_id = sys.argv[1]
+        self.replica_ids = sys.argv[2:]
+
+        self.state = FOLLOWER
+        self.leader = 'FFFF'
+        self.term = 0
+
+        self.q = []
+        self.log = []
+        self.store = {}
+
+        self.votes = 0
+        self.voted_for = None
+        self.last = None
+        self.election_time = None
+        self.leader_timeout = 2
+        self.election_timeout = random.uniform(0.1, 0.3)
+
+        self.commit_index = 0
+        self.last_applied = 0
+
+        # LEADER ONLY
+        self.next_index = []
+        self.match_index = []
+
+        # Connect to the network. All messages to/from other replicas and clients will
+        # occur over this socket
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        self.sock.connect(self.my_id)
+
+    def run(self):
+
+        while True:
+            ready = select.select([self.sock], [], [], 0.1)[0]
+
+            if self.sock in ready:
+                msg_raw = self.sock.recv(32768)
+
+                # MOVE OUTSIDE
+                if self.last is None:
+                    self.last = time.time()
+                if self.election_time is None:
+                    self.election_time = time.time()
+                if len(msg_raw) == 0:
+                    continue
+
+                msg = json.loads(msg_raw)
+                self.print_msg(msg)
+
+                if msg['type'] == HEARTBEAT:
+                    self.leader = msg['src']
+                    self.votes = 0
+
+
+
+                # --------------------------------- ELECTION
+                if self.state == FOLLOWER:
+                    if msg['src'] == self.leader:
+                        self.last = time.time()
+                    clock = time.time()
+                    if clock - self.last > self.leader_timeout or self.leader == 'FFFF':
+                        clock = time.time()
+                        if clock - self.election_time > self.election_timeout:
+                            # if self.voted_for is None:
+                            self.state = CANDIDATE
+                            self.election()
+
+                elif self.state == CANDIDATE:
+                    clock = time.time()
+                    if clock - self.election_time > self.election_timeout:
+                        self.election()
+
+                elif self.state == LEADER:
+                    pass
+
+                # --------------------------------MESSAGE HANDLER
+                if msg['type'] in ['get', 'put']:
+                    if self.state == LEADER:
+                        self.respond_client(msg)
+                        self.add_log(msg)
+                        for replica in self.replica_ids:
+                            log_msg = {"src": self.my_id, "dst": replica, "leader": self.leader, "type": APPEND_REQUEST,
+                                       'content': msg}
+                            self.sock.send(json.dumps(log_msg))
+                    elif self.leader != 'FFFF':
+                        # redirect to leader
+                        redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
+                                    "MID": msg['MID']}
+                        self.sock.send(json.dumps(redirect))
+                    else:
+                        redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.my_id, "type": "redirect",
+                                    "MID": msg['MID']}
+                        self.sock.send(json.dumps(redirect))
+                elif msg['type'] == APPEND_REQUEST:
+                    self.add_log(msg['content'])
+                    respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
+                    self.sock.send(json.dumps(respond_msg))
+                elif msg['type'] == VOTE_REQUEST:
+                    self.respond_vote(msg)
+                elif msg['type'] == VOTE_APPROVE and self.state == CANDIDATE:
+                    self.votes += 1
+                    if self.votes >= len(self.replica_ids) / 2:
+                        self.state = LEADER
+                        self.leader = self.my_id
+                        if DEBUG:
+                            print('I am the new leader ' + str(self.leader))
+                        self.votes = 0
+                        self.next_index = [len(self.log) + 1 for n in self.replica_ids]
+                        self.match_index = [0 for n in self.replica_ids]
+
+            if self.state == LEADER:
+                clock = time.time()
+                if clock - self.last > 1.5:
+                    for replica in self.replica_ids:
+                        msg = {'src': self.my_id, 'dst': replica, 'leader': self.leader, 'type': HEARTBEAT}
+                        self.sock.send(json.dumps(msg))
+                    self.last = clock
+
+    def print_msg(self, msg):
+        pass
+        if DEBUG:
+            # print('[%f] %s received a %s from %s' % (time.time(), msg['dst'], msg['type'], msg['src']))
+            print('%s believes %s is the leader, and he is %s' % (self.my_id, self.leader, self.state))
+            # print(str(self.store))
+
+    def add_log(self, msg):
+        log_msg = {"term": self.term, "content": msg}
+        self.log.append(log_msg)
+
+    def election(self):
+        self.term += 1
+        # self.leader = 'FFFF'
+        self.voted_for = self.my_id
+        self.election_time = time.time()
+        if DEBUG:
+            print('[%f] %s has started an election' % (time.time(), self.my_id))
+        self.request_vote()
+
+    def request_vote(self):
+        for replica in self.replica_ids:
+            last_log_index = len(self.log)
+            if (last_log_index == 0):
+                last_log_term = 0
+            else:
+                last_log_term = self.log[last_log_index - 1]['term']
+            vote = {'src': self.my_id, 'dst': replica, 'leader': self.my_id,
+                    'type': VOTE_REQUEST, 'term': self.term, 'last_index': last_log_index, 'last_term': last_log_term}
+            self.sock.send(json.dumps(vote))
+
+    def respond_vote(self, msg):
+        self.election_time = time.time()
+        response = {}
+        if self.term >= msg['term']:
+            response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
+                        'type': VOTE_REJECT}
+        else:
+            # TODO log stuff | check if vote for is none or same replica
+            self.term = msg['term']
+            self.leader = msg['src']
+            self.voted_for = msg['src']
+            self.state = FOLLOWER
+            response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
+                        'type': VOTE_APPROVE, 'term': self.term}
+        self.sock.send(json.dumps(response))
+
+    def respond_client(self, msg):
+        if msg['type'] == 'put':
+            self.store[msg['key']] = msg['value']
+            resp = {'src': self.my_id, 'dst': msg['src'],
+                    'leader': self.my_id, 'MID': msg['MID'], 'type': 'ok'}
+            self.sock.send(json.dumps(resp))
+        elif msg['type'] == 'get':
+            if msg['key'] in self.store:
+                value = self.store[msg['key']]
+                resp = {'src': self.my_id, 'dst': msg['src'],
+                        'leader': self.my_id, 'MID': msg['MID'], 'type': 'ok', 'value': value}
+                self.sock.send(json.dumps(resp))
+            else:
+                resp = {'src': self.my_id, 'dst': msg['src'],
+                        'leader': self.my_id, 'MID': msg['MID'], 'type': 'fail'}
+                self.sock.send(json.dumps(resp))
+
+
+if __name__ == "__main__":
+    server = Raft()
+    server.run()
