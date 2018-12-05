@@ -8,6 +8,7 @@ replica_ids = sys.argv[2:]
 
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
+server = Server(my_id, replica_ids, sock)
 
 while True:
     ready = select.select([sock], [], [], 0.1)[0]
@@ -19,7 +20,8 @@ while True:
             continue
 
         msg = json.loads(msg_raw)
-
+        server.rec_msg(msg)
+        
         # For now, fail get() and put() from clients
         if msg['type'] in ['get', 'put']:
             rsp = {'src':my_id,

@@ -6,25 +6,25 @@ class LogEntry():
         self.term = term
         self.index = index
 
-    def get_term(self):
+    def getTerm(self):
         return self.term
 
-    def get_inde(self):
+    def getIndex(self):
         return self.index
 
-    def get_type(self):
+    def getType(self):
         return self.msg['type']
 
-    def get_src(self):
+    def getSrc(self):
         return self.msg['src']
 
-    def get_key(self):
+    def getKey(self):
         try:
             return self.msg['key']
         except KeyError:
             return None
 
-    def get_value(self):
+    def getValue(self):
         try:
             return self.msg['value']
         except KeyError:

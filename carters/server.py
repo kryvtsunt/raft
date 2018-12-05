@@ -2,9 +2,12 @@
 
 
 # this class represents a server which can change states, send messages, and respond to mesages
+# consider signal.setitimer()
+
 class Server():
-    def __init__(self, ID, neighbors):
+    def __init__(self, ID, neighbors, sock):
         self.ID = ID
+        self.sock = sock
         
         self.log = []
         self.neighbors = neighbors
@@ -20,8 +23,24 @@ class Server():
         self.state.set_server(self)
 
     def swtich_state(self, new_state):
+        self.state.signal.alarm(0)
         self.state = new_state
         self.state.set_server(self)
         self.state.start()
+
+    def rec_msg(self, msg):
+        self.state.rec_message(msg)
+
+    def send_msg(self, msg):
+        self.sock.sendall(json.loads(msg))
+        
+    def getLastLogTerm(self):
+        last = self.log(len(self.log) - 1)
+        return last.getTerm()
+
+    def getLastLogIndex(self):
+        last = self.log(len(self.log) - 1)
+        return last.getIndex()
+        
 
         
