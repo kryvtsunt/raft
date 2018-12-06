@@ -130,10 +130,10 @@ class Raft:
             self.sock.send(json.dumps(redirect))
         else:
             # print(msg['MID'])
-            redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.my_id, "type": "redirect",
-                        "MID": msg['MID']}
-            self.sock.send(json.dumps(redirect))
-            # self.q.append(msg)
+            # redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.my_id, "type": "redirect",
+            #             "MID": msg['MID']}
+            # self.sock.send(json.dumps(redirect))
+            self.q.append(msg)
 
     def respond_append_request(self, msg):
         self.add_log(msg['content'])
@@ -152,7 +152,6 @@ class Raft:
             self.match_index = [0 for n in self.replica_ids]
             self.store = {}
             self.create_store()
-
 
 
     def start_election(self):
@@ -220,11 +219,11 @@ class Raft:
     def respond_heartbeat(self, msg):
         self.leader = msg['src']
         self.votes = 0
-        # for msg in self.q:
-        #     redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
-        #                 "MID": msg['MID']}
-        #     self.sock.send(json.dumps(redirect))
-        # self.q = []
+        for msg in self.q:
+            redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
+                        "MID": msg['MID']}
+            self.sock.send(json.dumps(redirect))
+        self.q = []
 
     def create_store(self):
         for message in self.log:
