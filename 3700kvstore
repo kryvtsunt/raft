@@ -9,7 +9,7 @@ LEADER = 'leader'
 
 VOTE_REQUEST = "vote_request"
 VOTE_REJECT = "vote_reject"
-VOTE_APPROVE = "vote_aapprove"
+VOTE_APPROVE = "vote_approve"
 APPEND_REQUEST = "append_request"
 APPEND_APPROVE = "append_approve"
 HEARTBEAT = "heartbeat"
@@ -176,7 +176,32 @@ class Raft:
 
     def respond_vote_request(self, msg):
         self.election_time = time.time()
-        response = {}
+        ###### Carter's code
+        
+        # rules for all servers (2)
+        if msg['term'] > self.term:
+        	self.term = msg['term']
+        	self.voted_for = None
+        	self.state = FOLLOWER
+        	
+        # receiver implementation (1)
+        if msg['term'] < self.term:
+    		rsp = { 'src':self.my_id, 'dst':msg['src'], 'leader':self.leader, 'type':VOTE_REJECT, 'MID':msg['MID'], 'term':self.term, 'voteGranted':False}
+    		self.sock.send(json.dumps(rsp))
+        	return None
+        # receiver implementation (2)
+        if (self.votedFor == None or self.votedFor == msg['candidateID']) and (self.candidateLogUpToDate(msg['lastLogIndex'], msg['lastLogTerm'])):
+        	rsp = { 'src':self.server.my_id, 'dst':msg['src'], 'leader':self.server.leader, 'type':VOTE_APPROVE, 'MID':msg['MID'], 'term':self.term, 'voteGranted':True}
+        	self.voted_for = msg['candidateID']
+        	self.sock.send(json.dumps(rsp))
+        	return None
+        
+        rsp = {'src':self.server.my_id, 'dst':msg['src'], 'leader':self.server.leader, 'type':VOTE_REJECT, 'MID':msg['MID'], 'term':self.term, 'voteGranted':False}
+        self.sock.send(json.dumps(rsp))
+        ######
+        
+        
+        
         if self.term >= msg['term']:
             response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
                         'type': VOTE_REJECT}
@@ -251,6 +276,25 @@ class Raft:
     def add_log(self, msg):
         log_msg = {"term": self.term, "content": msg}
         self.log.append(log_msg)
+        
+    def candidateLogUpToDate(self, lastLogIndex, lastLogTerm):
+    	if self.getLastLogTerm() < lastLogTerm:
+    		return True
+    	elif self.getLastLogTerm() == lastLogTerm and self.getLastLogIndex <= lastLogTerm:
+    		return True
+    	else:
+    		return False
+    		
+    def getLastLogTerm(self):
+    	try:
+    		last = self.log[len(self.log) - 1]['term']
+    		return last
+    	except IndexError:
+    		return 0
+    		
+    def getLastLogIndex(self):
+    	return len(self.log)
+    	
 
 
 
