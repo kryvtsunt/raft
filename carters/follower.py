@@ -107,8 +107,8 @@ rsp = {
             return None
 
         raise RuntimeError("Unexpected behavior! follower.py, handle_vote_req()")
-                
-            
+
+
 
     def start(self):
         pass

@@ -1,7 +1,417 @@
 #!/usr/bin/env python3
 
+<<<<<<< HEAD
 import sys, socket, select, json
 from server import Server
+=======
+import sys, socket, select, json, signal
+
+
+APPEND = "appendEntries"
+APPEND_RSP = "appendEntriesResponse"
+VOTE_REQ = "voteRequest"
+VOTE_REQ_RSP = "voteRequestResponse"
+
+# this class is an abstract state. it will represent a follower, candidate, or leader
+class State():
+    # timeout must be an int seconds
+    def __init__(self, timeout):
+        self.timeout = timeout
+        self.signal = signal.signal(signal.SIGALRM, self.sig_handler)
+        self.signal.alarm(timeout)
+
+    def set_server(self, server):
+        self.server = server
+
+    def rec_message(self, msg):
+        self.resetAlarm()
+
+        # For now, fail get() and put() from clients
+        if msg['type'] in ['get', 'put']:
+            rsp = {'src': my_id,
+                   'dst': msg['src'],
+                   'leader': None,
+                   'type': 'fail',
+                   'MID': msg['MID']}
+
+        if msg['type'] == APPEND:
+            self.handle_append_entries(msg)
+        elif msg['type'] == APPEND_RSP:
+            self.handle_append_entries_rsp(msg)
+        elif msg['type'] == VOTE_REQ:
+            self.handle_vote_req(msg)
+        elif msg['type'] == VOTE_REQ_RSP:
+            self.handle_vote_req_rsp(msg)
+        else:
+            raise RuntimeError("Unexpected message")
+
+    # for everyone
+    def sig_handler(self, signum, frame):
+        raise RuntimeError("TODO")
+
+    # for followers and candidates
+    def handle_append_entries(self, msg):
+        raise RuntimeError("TODO")
+
+    # for leaders
+    def handle_append_entries_rsp(self, msg):
+        raise RuntimeError("TODO")
+
+    # for everyone
+    def handle_vote_req(self, msg):
+        raise RuntimeError("TODO")
+
+    # for candidates
+    def handle_vote_req_rsp(self, msg):
+        raise RuntimeError("TODO")
+
+    # for everyone
+    def start(self):
+        raise RuntimeError("TODO")
+
+    def candidateLogUpToDate(self, lastLogIndex, lastLogTerm):
+        if self.server.getLastLogTerm() < lastLogTerm:
+            return True
+        elif (self.server.getLastLogTerm() == lastLogTerm) and \
+                (self.server.getLastLogIndex() < lastLogIndex):
+            return True
+        else:
+            return False
+
+    def resetAlarm(self):
+        # turn alarm OFF
+        self.signal.alarm(0)
+
+        # turn alarm ON
+        self.signal.alarm(self.timeout)
+
+# this class represents a server which can change states, send messages, and respond to mesages
+# consider signal.setitimer()
+
+class Server():
+    def __init__(self, ID, neighbors, sock):
+        self.ID = ID
+        self.sock = sock
+
+        self.log = []
+        self.neighbors = neighbors
+        self.currentTerm = 0
+        self.leader = None
+
+        self.votedFor = None
+
+        self.commitIndex = 0
+        self.lastApplied = 0
+
+        self.state = Follower()
+        self.state.set_server(self)
+
+    def swtich_state(self, new_state):
+        self.state.signal.alarm(0)
+        self.state = new_state
+        self.state.set_server(self)
+        self.state.start()
+
+    def rec_msg(self, msg):
+        self.state.rec_message(msg)
+
+    def send_msg(self, msg):
+        self.sock.sendall(json.loads(msg))
+
+    def getLastLogTerm(self):
+        try:
+            last = self.log(len(self.log) - 1)
+            return last.getTerm()
+        except IndexError:
+            return 0
+
+    def getLastLogIndex(self):
+        try:
+            last = self.log(len(self.log) - 1)
+            return last.getIndex()
+        except IndexError:
+            return 0
+
+
+
+
+
+class Follower(State):
+    def __init__(self, timeout=2):
+        super().__init__(timeout)
+
+    def sig_handler(self, signum, frame):
+        """If a follower times out, then they convert to a Candidate"""
+        # turn off alarm
+        self.signal.alarm(0)
+
+        # tell server to switch
+        self.server.switch_state(Candidate())
+
+
+
+    def handle_append_entries(self, msg):
+        # super.handle_append_entries(msg)
+
+        # update everything for now
+        self.server.leader = msg['leader']
+        self.server.currentTerm = msg['term']
+        # reply true for now
+        rsp = {'src': self.server.ID,
+               'dst': msg['src'],
+               'leader': self.server.leader,
+               'type': APPEND_RSP,
+               'MID': msg['MID'],
+               'term': self.server.currentTerm,
+               'success': True}
+        self.server.send_msg(rsp)
+        return None
+
+
+
+    def handle_vote_req(self, msg):
+        # super.handle_append_entries(msg)
+
+        # rules for all servers (2)
+        if msg['term'] > self.server.currentTerm:
+            self.server.currentTerm = msg['term']
+            self.server.votedFor = None
+            self.server.switch_state(Follower())
+
+        # receiver implementation (1)
+        if msg['term'] < self.server.currentTerm:
+            rsp = {'src': self.server.my_id,
+                   'dst': msg['src'],
+                   'leader': self.server.leader,
+                   'type': VOTE_REQ_RSP,
+                   'MID': msg['MID'],
+                   'term': self.server.currentTerm,
+                   'voteGranted': False}
+            self.server.send_msg(rsp)
+            return None
+
+        # receiver implementation (2)
+        if (self.votedFor == None or self.votedFor == msg['candidateID']) and \
+                (self.candidateLogUpToDate(msg['lastLogIndex'], msg['lastLogTerm'])):
+            rsp = {'src': self.server.my_id,
+                   'dst': msg['src'],
+                   'leader': self.server.leader,
+                   'type': VOTE_REQ_RSP,
+                   'MID': msg['MID'],
+                   'term': self.server.currentTerm,
+                   'voteGranted': False}
+            self.server.send_msg(rsp)
+            self.votedFor = msg['candidateID']
+            return None
+
+        raise RuntimeError("Unexpected behavior! follower.py, handle_vote_req()")
+
+
+
+
+
+class Candidate(State):
+    def __init__(self, timeout=3):
+        super().__init__(timeout)
+        self.num_votes = 0
+
+    # TODO can allow candidates to send out vote_reqs twice before timing out
+    def sig_handler(self, signum, frame):
+        # turn off alarm
+        self.signal.alarm(0)
+
+        # start another election
+        self.election()
+
+        # reset alarm
+        self.signal.alarm(self.timeout)
+
+    def handle_append_entries(self, msg):
+        # super.handle_append_entries(msg)
+
+        # switch to follower for now
+        self.server.switch_state(Follower())
+
+        # update everything for now
+        self.server.leader = msg['leader']
+        self.server.currentTerm = msg['term']
+        # reply true for now
+        rsp = {'src': self.server.ID,
+               'dst': msg['src'],
+               'leader': self.server.leader,
+               'type': APPEND_RSP,
+               'MID': msg['MID'],
+               'term': self.server.currentTerm,
+               'success': True}
+        self.server.send_msg(rsp)
+        return None
+
+    def handle_vote_req(self, msg):
+        # super.handle_append_entries(msg)
+
+        # rules for all servers (2)
+        if msg['term'] > self.server.currentTerm:
+            self.server.currentTerm = msg['term']
+            self.server.votedFor = None
+            self.server.switch_state(Follower())
+
+        # receiver implementation (1)
+        if msg['term'] < self.server.currentTerm:
+            rsp = {'src': self.server.my_id,
+                   'dst': msg['src'],
+                   'leader': self.server.leader,
+                   'type': VOTE_REQ_RSP,
+                   'MID': msg['MID'],
+                   'term': self.server.currentTerm,
+                   'voteGranted': False}
+            self.server.send_msg(rsp)
+            return None
+
+        # receiver implementation (2)
+        if (self.votedFor == None or self.votedFor == msg['candidateID']) and \
+                (self.candidateLogUpToDate(msg['lastLogIndex'], msg['lastLogTerm'])):
+            rsp = {'src': self.server.my_id,
+                   'dst': msg['src'],
+                   'leader': self.server.leader,
+                   'type': VOTE_REQ_RSP,
+                   'MID': msg['MID'],
+                   'term': self.server.currentTerm,
+                   'voteGranted': False}
+            self.server.send_msg(rsp)
+            self.votedFor = msg['candidateID']
+            return None
+
+        # if all else fails, reply false ?
+        rsp = {'src': self.server.my_id,
+               'dst': msg['src'],
+               'leader': self.server.leader,
+               'type': VOTE_REQ_RSP,
+               'MID': msg['MID'],
+               'term': self.server.currentTerm,
+               'voteGranted': False}
+        self.server.send_msg(rsp)
+        return None
+
+    def handle_vote_req_rsp(self, msg):
+        # super.handle_vote_req_rsp(msg)
+
+        # rules for all servers (2)
+        if msg['term'] > self.server.currentTerm:
+            self.server.currentTerm = msg['term']
+            self.server.votedFor = None
+            self.server.switch_state(Follower())
+
+        # ignore anything before this current term ?
+        if msg['term'] < self.server.currentTerm:
+            # ignore
+            return None
+
+        self.num_votes += 1
+
+        if self.num_votes > len(self.server.neighbors) / 2:
+            self.server.switch_state(Leader())
+            return None
+
+        return None
+
+    def start(self):
+        self.election()
+
+    def election(self):
+        self.server.currentTerm += 1
+        self.leader = None
+        self.server.votedFor = self.server.ID
+        self.num_votes = 1  # need to reset votes from term to term
+
+        for n in self.server.neighbors:
+            msg = {'src': self.server.ID,
+                   'dst': n,
+                   'leader': None,
+                   'type': VOTE_REQ,
+                   'term': self.server.currentTerm,
+                   'candidateID': self.server.ID,
+                   'lastLogIndex': self.server.getLastLogIndex(),
+                   'lastLogTerm': self.server.getLastLogTerm()}
+            self.server.send_msg(msg)
+        return None
+
+
+class Leader(State):
+    def __init__(self, timeout=1):
+        super().__init__(timeout)
+
+    def sig_handler(self, signum, frame):
+        # turn alarm ON
+        self.signal.alarm(0)
+
+        # send out heartbeat
+        self.send_heartbeats()
+
+        # turn alarm ON
+        self.signal.alarm(self.timeout)
+
+    def handle_vote_req(self, msg):
+        # super.handle_vote_req(msg)
+        pass
+
+    def handle_append_entries_rsp(self, msg):
+        # super.handle_append_entries_rsp(msg)
+        pass
+
+    def start(self):
+        self.send_heartbeats()
+
+    def send_heartbeats(self):
+        for n in self.server.neighbors:
+            msg = {'src': self.server.ID,
+                   'dst': n,
+                   'leader': None,
+                   'type': VOTE_REQ,
+                   'MID': None,  # TODO, fix?
+                   'term': self.server.currentTerm,
+                   'candidateID': self.server.ID,
+                   'lastLogIndex': self.server.getLastLogIndex(),
+                   'lastLogTerm': self.server.getLastLogTerm()}
+            self.server.send_msg(msg)
+
+        return None
+
+
+# represents a log entry with the command for the state machine and the term
+# when the entry was received by leader
+class LogEntry():
+    def __init__(self, msg, term, index):
+        self.msg = msg
+        self.term = term
+        self.index = index
+
+    def getTerm(self):
+        return self.term
+
+    def getIndex(self):
+        return self.index
+
+    def getType(self):
+        return self.msg['type']
+
+    def getSrc(self):
+        return self.msg['src']
+
+    def getKey(self):
+        try:
+            return self.msg['key']
+        except KeyError:
+            return None
+
+    def getValue(self):
+        try:
+            return self.msg['value']
+        except KeyError:
+            return None
+
+
+
+>>>>>>> 5037506003ff3598262b797f9a7261b4360e0a58
 
 my_id = str(sys.argv[1])
 
@@ -22,13 +432,14 @@ while True:
 
         msg = json.loads(msg_raw)
         server.rec_msg(msg)
-        
+
         # For now, fail get() and put() from clients
         if msg['type'] in ['get', 'put']:
-            rsp = {'src':my_id,
-                   'dst':msg['src'],
-                   'leader':None,
-                   'type':'fail',
-                   'MID':msg['MID']}
-            
+            rsp = {'src': my_id,
+                   'dst': msg['src'],
+                   'leader': None,
+                   'type': 'fail',
+                   'MID': msg['MID']}
+
             sock.sendall(json.loads(rsp))
+
