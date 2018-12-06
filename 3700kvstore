@@ -12,6 +12,8 @@ VOTE_REJECT = "vote_reject"
 VOTE_APPROVE = "vote_approve"
 APPEND_REQUEST = "append_request"
 APPEND_APPROVE = "append_approve"
+APPEND_REJECT = "append_reject"
+
 HEARTBEAT = "heartbeat"
 
 
@@ -121,12 +123,9 @@ class Raft:
 
     def respond_client_request(self, msg):
         if self.state == LEADER:
+            self.send_append_request(msg)
             self.respond_client(msg)
-            self.add_log(msg)
-            for replica in self.replica_ids:
-                log_msg = {"src": self.my_id, "dst": replica, "leader": self.leader, "type": APPEND_REQUEST,
-                           'content': msg}
-                self.sock.send(json.dumps(log_msg))
+
         elif self.leader != 'FFFF':
             # redirect to leader
             redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
@@ -139,10 +138,47 @@ class Raft:
             # self.sock.send(json.dumps(redirect))
             self.q.append(msg)
 
+    def send_append_request(self, msg):
+        last_log_index = len(self.log)
+        if (last_log_index == 0):
+            last_log_term = 0
+        else:
+            last_log_term = self.log[last_log_index - 1]['term']
+        for replica in self.replica_ids:
+            log_msg = {"src": self.my_id, "dst": replica, "leader": self.leader, "type": APPEND_REQUEST,
+                       'content': msg, 'term': self.term, 'last_index': last_log_index, 'last_term': last_log_term,
+                       'commit_index': self.commit_index}
+            self.sock.send(json.dumps(log_msg))
+
     def respond_append_request(self, msg):
-        self.add_log(msg['content'])
+        if self.commit_index > self.last_applied:
+            self.last_applied+=1
+            # apply log[last_applied] to state machine
+            # self.add_log(msg['content'])
+        if msg['term'] > self.term:
+            self.term = msg['term']
+            self.voted_for = 'FFFF'
+            self.state = FOLLOWER
+        if msg['term'] < self.term:
+            rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': APPEND_REJECT,
+                   'term': self.term}
+            self.sock.send(json.dumps(rsp))
+        if self.term_not_matches(msg):
+            rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': APPEND_REJECT,
+                   'term': self.term}
+            self.sock.send(json.dumps(rsp))
+        if self.term_not_matches(msg):
+
+
+
+
         respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
         self.sock.send(json.dumps(respond_msg))
+
+    def term_not_matches(self, msg):
+        return False
+    #        if self.log[msg['last_index']-2]['term']
+
 
     def respond_election(self, msg):
         self.votes += 1
@@ -224,6 +260,7 @@ class Raft:
 
     def respond_client(self, msg):
         if msg['type'] == 'put':
+            self.add_log(msg)
             self.store[msg['key']] = msg['value']
             resp = {'src': self.my_id, 'dst': msg['src'],
                     'leader': self.my_id, 'MID': msg['MID'], 'type': 'ok'}
