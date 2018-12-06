@@ -151,33 +151,53 @@ class Raft:
             self.sock.send(json.dumps(log_msg))
 
     def respond_append_request(self, msg):
+    	# rules for all servers (1)
         if self.commit_index > self.last_applied:
             self.last_applied+=1
             # apply log[last_applied] to state machine
-            # self.add_log(msg['content'])
+            # something with store???
+        # rules for all servers (2)
         if msg['term'] > self.term:
             self.term = msg['term']
             self.voted_for = 'FFFF'
             self.state = FOLLOWER
+        # receiver impl (1)
         if msg['term'] < self.term:
             rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': APPEND_REJECT,
                    'term': self.term}
             self.sock.send(json.dumps(rsp))
-        if self.term_not_matches(msg):
+        # receiver impl (2)
+        if self.diff_index_term(msg):
             rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': APPEND_REJECT,
                    'term': self.term}
             self.sock.send(json.dumps(rsp))
-        if self.term_not_matches(msg):
+        else:
+        	# receiver impl (3)
+        	if self.same_index_diff_term(msg):
+        		self.log = self.log[:msg['last_index']]
+	        # receiver impl (4)
+	        self.log.append(msg['content']) #TODO can add multiple things?
+	        self.last_applied += 1
+	        #receiver imp (5)
+	        if msg['commit_index'] > self.commit_index:
+	        	self.commit_index = min(msg['commit_index'], self.last_applied)
+	        	
+	        respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
+	        self.sock.send(json.dumps(respond_msg))
 
-
-
-
-        respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
-        self.sock.send(json.dumps(respond_msg))
-
-    def term_not_matches(self, msg):
-        return False
-    #        if self.log[msg['last_index']-2]['term']
+    def diff_index_term(self, msg):
+    	try:
+        	our_last = self.log[msg['last_index']]
+        	return False and our_last['term'] != msg['last_term']
+        except IndexError:
+        	return True
+        
+    def same_index_diff_term(self, msg):
+    	try:
+        	our_last = self.log[msg['last_index']]
+        	return True and our_last['term'] != msg['last_term']
+        except IndexError:
+        	return False
 
 
     def respond_election(self, msg):
