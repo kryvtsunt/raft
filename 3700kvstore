@@ -14,6 +14,8 @@ APPEND_REQUEST = "append_request"
 APPEND_APPROVE = "append_approve"
 HEARTBEAT = "heartbeat"
 
+HEARTBEAT_RESPONSE = "heartbeat_response"
+
 
 class Raft:
     def __init__(self):
@@ -122,11 +124,9 @@ class Raft:
     def respond_client_request(self, msg):
         if self.state == LEADER:
             self.respond_client(msg)
-            self.add_log(msg)
-            log = self.get_log()
             for replica in self.replica_ids:
                 log_msg = {"src": self.my_id, "dst": replica, "leader": self.leader, "type": APPEND_REQUEST,
-                           'content': log}
+                           'content': self.get_log()}
                 self.sock.send(json.dumps(log_msg))
         elif self.leader != 'FFFF':
             # redirect to leader
@@ -141,16 +141,20 @@ class Raft:
             self.q.append(msg)
 
     def respond_append_request(self, msg):
-
-        for m in msg['content']:
-            if m not in self.log:
-                self.add_log(m['content'])
+        self.update_log(msg)
         # respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
         # self.sock.send(json.dumps(respond_msg))
 
+    def update_log(self, msg):
+        for m in msg['content']:
+            if m not in self.log:
+                self.add_log(m)
+                self.store[m['key']] = m['value']
+
     def respond_election(self, msg):
+        self.update_log(msg)
         self.votes += 1
-        if self.votes >= len(self.replica_ids) / 2:
+        if self.votes >= 3:
             self.state = LEADER
             self.leader = self.my_id
             if DEBUG:
@@ -164,6 +168,7 @@ class Raft:
     def start_election(self):
         self.term += 1
         self.leader = 'FFFF'
+        self.votes=1
         self.voted_for = self.my_id
         self.election_time = time.time()
         if DEBUG:
@@ -172,62 +177,61 @@ class Raft:
 
     def request_vote(self):
         for replica in self.replica_ids:
-            last_log_index = len(self.log)
-            if (last_log_index == 0):
-                last_log_term = 0
-            else:
-                last_log_term = self.log[last_log_index - 1]['term']
-            vote = {'src': self.my_id, 'dst': replica, 'leader': self.my_id,
-                    'type': VOTE_REQUEST, 'term': self.term, 'last_index': last_log_index, 'last_term': last_log_term}
+            vote = {'src': self.my_id, 'dst': replica, 'leader': self.leader,
+                    'type': VOTE_REQUEST, 'term': self.term}
             self.sock.send(json.dumps(vote))
 
     def respond_vote_request(self, msg):
         self.election_time = time.time()
+        self.leader = 'FFFF'
+
         ###### Carter's code
 
-        # rules for all servers (2)
-        if msg['term'] > self.term:
-            self.term = msg['term']
-            self.voted_for = 'FFFF'
-            self.state = FOLLOWER
-
-        # receiver implementation (1)
-        if msg['term'] < self.term:
-            rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_REJECT,
-                   'term': self.term}
-            self.sock.send(json.dumps(rsp))
-        # receiver implementation (2)
-        elif (self.voted_for == 'FFFF' or self.voted_for == msg['src']) and (
-                self.candidateLogUpToDate(msg['last_index'], msg['last_term'])):
-            self.voted_for = msg['src']
-            self.leader = msg['src']
-            rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_APPROVE,
-                       'term': self.term}
-
-            self.sock.send(json.dumps(rsp))
-        else:
-            rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_REJECT,
-                   'term': self.term}
-            self.sock.send(json.dumps(rsp))
+        # # rules for all servers (2)
+        # if msg['term'] > self.term:
+        #     self.term = msg['term']
+        #     self.leader = 'FFFF'
+        #     self.voted_for = 'FFFF'
+        #     self.state = FOLLOWER
+        #
+        # # receiver implementation (1)
+        # if msg['term'] < self.term:
+        #     rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_REJECT,
+        #            'term': self.term}
+        #     self.sock.send(json.dumps(rsp))
+        # # receiver implementation (2)
+        # elif (self.voted_for == 'FFFF' or self.voted_for == msg['src']) and (
+        #         self.candidateLogUpToDate(msg['last_index'], msg['last_term'])):
+        #     self.voted_for = msg['src']
+        #     self.leader = msg['src']
+        #     rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_APPROVE,
+        #                'term': self.term}
+        #
+        #     self.sock.send(json.dumps(rsp))
+        # else:
+        #     rsp = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader, 'type': VOTE_REJECT,
+        #            'term': self.term}
+        #     self.sock.send(json.dumps(rsp))
         ######
 
 
-        #
-        # if self.term >= msg['term']:
-        #     response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
-        #                 'type': VOTE_REJECT}
-        # else:
-        #     # TODO log stuff | check if vote for is none or same replica
-        #     self.term = msg['term']
-        #     self.leader = msg['src']
-        #     self.voted_for = msg['src']
-        #     self.state = FOLLOWER
-        #     response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
-        #                 'type': VOTE_APPROVE, 'term': self.term}
-        # self.sock.send(json.dumps(response))
+
+        if self.term >= msg['term']:
+            response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
+                        'type': VOTE_REJECT}
+        else:
+            # TODO log stuff | check if vote for is none or same replica
+            self.term = msg['term']
+            self.leader = msg['src']
+            self.voted_for = msg['src']
+            self.state = FOLLOWER
+            response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
+                        'type': VOTE_APPROVE, 'term': self.term, 'content': self.get_log()}
+        self.sock.send(json.dumps(response))
 
     def respond_client(self, msg):
         if msg['type'] == 'put':
+            self.add_log(msg)
             self.store[msg['key']] = msg['value']
             resp = {'src': self.my_id, 'dst': msg['src'],
                     'leader': self.my_id, 'MID': msg['MID'], 'type': 'ok'}
@@ -254,15 +258,22 @@ class Raft:
 
     def send_heartbeat(self):
         clock = time.time()
-        if clock - self.last > .3:
+        if clock - self.last > .25:
             for replica in self.replica_ids:
-                msg = {'src': self.my_id, 'dst': replica, 'leader': self.leader, 'type': HEARTBEAT}
+                msg = {'src': self.my_id, 'dst': replica, 'leader': self.leader, 'term': self.term, 'type': HEARTBEAT}
                 self.sock.send(json.dumps(msg))
             self.last = clock
 
     def respond_heartbeat(self, msg):
-        self.leader = msg['src']
-        self.votes = 0
+        if self.state == LEADER:
+            self.start_election()
+            return
+        if msg['term'] >= self.term:
+            self.state = FOLLOWER
+            self.last = time.time()
+            self.leader = msg['src']
+            self.voted_for = 'FFFF'
+
         for msg in self.q:
             redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.leader, "type": "redirect",
                         "MID": msg['MID']}
@@ -270,10 +281,8 @@ class Raft:
         self.q = []
 
     def create_store(self):
-        for message in self.log:
-            msg = message['content']
-            if msg['type'] == 'put':
-                self.store[msg['key']] = msg['value']
+        for msg in self.log:
+            self.store[msg['key']] = msg['value']
 
     # UTIL FUNCTIONS
 
@@ -285,8 +294,9 @@ class Raft:
             # print(str(self.store))
 
     def add_log(self, msg):
-        log_msg = {"term": self.term, "content": msg}
-        self.log.append(log_msg)
+        # log_msg = {"term": self.term, "content": msg}
+        message = {'key': msg['key'], 'value': msg['value']}
+        self.log.append(message)
 
     def candidateLogUpToDate(self, lastLogIndex, lastLogTerm):
         if self.getLastLogTerm() < lastLogTerm:
