@@ -3,10 +3,13 @@
 import sys, socket, select, time, json, random
 
 DEBUG = False
+
+# STATES
 FOLLOWER = 'follower'
 CANDIDATE = 'candidate'
 LEADER = 'leader'
 
+# TYPE OF MESSAGES
 VOTE_REQUEST = "vote_request"
 VOTE_REJECT = "vote_reject"
 VOTE_APPROVE = "vote_approve"
@@ -14,32 +17,32 @@ APPEND_REQUEST = "append_request"
 APPEND_APPROVE = "append_approve"
 HEARTBEAT = "heartbeat"
 
-HEARTBEAT_RESPONSE = "heartbeat_response"
-
-
+# A class that represent a single replica in the
+# Distributed Replicated Key-Value Store
 class Raft:
     def __init__(self):
-        # ids
         self.my_id = sys.argv[1]
         self.replica_ids = sys.argv[2:]
 
+        # current state information
         self.state = FOLLOWER
         self.leader = 'FFFF'
         self.term = 0
 
+        # to store information about the new messages
         self.q = []
         self.log = []
         self.store = {}
+        self.commit_index = 0
+        self.last_applied = 0
 
+        # election related
         self.votes = 0
         self.voted_for = 'FFFF'
         self.last = None
         self.election_time = None
         self.leader_timeout = 0.5
         self.election_timeout = random.uniform(0.1, 0.3)
-
-        self.commit_index = 0
-        self.last_applied = 0
 
         # LEADER ONLY
         self.next_index = []
@@ -50,8 +53,8 @@ class Raft:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.sock.connect(self.my_id)
 
+    # main function to start the replica
     def run(self):
-        # MOVE OUTSIDE
         if self.last is None:
             self.last = time.time()
         if self.election_time is None:
@@ -80,15 +83,15 @@ class Raft:
                 msg = json.loads(msg_raw)
                 self.print_info(msg)
 
-                if msg['type'] == HEARTBEAT:
-                    self.respond_heartbeat(msg)
+                # ---------------------------------------MESSAGE HANDLER
 
                 if msg['src'] == self.leader:
                     self.last = time.time()
 
+                if msg['type'] == HEARTBEAT:
+                    self.respond_heartbeat(msg)
 
-                # ---------------------------------------MESSAGE HANDLER
-                if msg['type'] in ['get', 'put']:
+                elif msg['type'] in ['get', 'put']:
                     self.respond_client_request(msg)
 
                 elif msg['type'] == APPEND_REQUEST:
@@ -100,10 +103,7 @@ class Raft:
                 elif msg['type'] == VOTE_APPROVE and self.state == CANDIDATE:
                     self.respond_election(msg)
 
-
-
-
-
+    # if the FOLLOWER
     def frun(self):
         clock = time.time()
         if clock - self.last > self.leader_timeout or self.leader == 'FFFF':
@@ -113,14 +113,17 @@ class Raft:
                 self.state = CANDIDATE
                 self.start_election()
 
+    # if the CANDIDATE
     def crun(self):
         clock = time.time()
         if clock - self.election_time > self.election_timeout:
             self.start_election()
 
+    # if the LEADER
     def lrun(self):
         self.send_heartbeat()
 
+    # respond get/put requests
     def respond_client_request(self, msg):
         if self.state == LEADER:
             self.respond_client(msg)
@@ -134,16 +137,11 @@ class Raft:
                         "MID": msg['MID']}
             self.sock.send(json.dumps(redirect))
         else:
-            # print(msg['MID'])
-            # redirect = {"src": msg['dst'], "dst": msg['src'], "leader": self.my_id, "type": "redirect",
-            #             "MID": msg['MID']}
-            # self.sock.send(json.dumps(redirect))
+            # append to the queue
             self.q.append(msg)
 
     def respond_append_request(self, msg):
         self.update_log(msg)
-        # respond_msg = {"src": self.my_id, "dst": self.leader, "leader": self.leader, "type": APPEND_APPROVE}
-        # self.sock.send(json.dumps(respond_msg))
 
     def update_log(self, msg):
         for m in msg['content']:
@@ -151,6 +149,7 @@ class Raft:
                 self.add_log(m)
                 self.store[m['key']] = m['value']
 
+    # end of the election
     def respond_election(self, msg):
         self.update_log(msg)
         self.votes += 1
@@ -165,6 +164,7 @@ class Raft:
             self.store = {}
             self.create_store()
 
+    # start of the election
     def start_election(self):
         self.term += 1
         self.leader = 'FFFF'
@@ -175,18 +175,18 @@ class Raft:
             print('[%f] %s has started an election' % (time.time(), self.my_id))
         self.request_vote()
 
+    # request all replicas to vote
     def request_vote(self):
         for replica in self.replica_ids:
             vote = {'src': self.my_id, 'dst': replica, 'leader': self.leader,
                     'type': VOTE_REQUEST, 'term': self.term}
             self.sock.send(json.dumps(vote))
 
+    # vote in the election
     def respond_vote_request(self, msg):
         self.election_time = time.time()
         self.leader = 'FFFF'
-
         ###### Carter's code
-
         # # rules for all servers (2)
         # if msg['term'] > self.term:
         #     self.term = msg['term']
@@ -213,14 +213,10 @@ class Raft:
         #            'term': self.term}
         #     self.sock.send(json.dumps(rsp))
         ######
-
-
-
         if self.term >= msg['term']:
             response = {'src': self.my_id, 'dst': msg['src'], 'leader': self.leader,
                         'type': VOTE_REJECT}
         else:
-            # TODO log stuff | check if vote for is none or same replica
             self.term = msg['term']
             self.leader = msg['src']
             self.voted_for = msg['src']
@@ -229,6 +225,7 @@ class Raft:
                         'type': VOTE_APPROVE, 'term': self.term, 'content': self.get_log()}
         self.sock.send(json.dumps(response))
 
+    # leader handles client request
     def respond_client(self, msg):
         if msg['type'] == 'put':
             self.add_log(msg)
@@ -247,15 +244,16 @@ class Raft:
                         'leader': self.my_id, 'MID': msg['MID'], 'type': 'fail'}
                 self.sock.send(json.dumps(resp))
 
+    # get latest entries from the log
     def get_log(self):
         log = []
         for i in range(100,0,-1):
             if (len(self.log)<i):
                 continue
             log.append(self.log[len(self.log)-i])
-        # print(log)
         return log
 
+    # leader send a heartbeat
     def send_heartbeat(self):
         clock = time.time()
         if clock - self.last > .25:
@@ -264,6 +262,7 @@ class Raft:
                 self.sock.send(json.dumps(msg))
             self.last = clock
 
+    # replicas respond leader's heartbeat
     def respond_heartbeat(self, msg):
         if self.state == LEADER:
             self.start_election()
@@ -280,24 +279,30 @@ class Raft:
             self.sock.send(json.dumps(redirect))
         self.q = []
 
+    # use log to create a new store
     def create_store(self):
         for msg in self.log:
             self.store[msg['key']] = msg['value']
 
+
+
+
+
     # UTIL FUNCTIONS
 
+    # print the info about current state of the replica
     def print_info(self, msg):
         pass
         if DEBUG:
-            # print('[%f] %s received a %s from %s' % (time.time(), msg['dst'], msg['type'], msg['src']))
+            print('[%f] %s received a %s from %s' % (time.time(), msg['dst'], msg['type'], msg['src']))
             print('%s believes %s is the leader, and he is %s' % (self.my_id, self.leader, self.state))
-            # print(str(self.store))
 
+    # add new entry to the log
     def add_log(self, msg):
-        # log_msg = {"term": self.term, "content": msg}
         message = {'key': msg['key'], 'value': msg['value']}
         self.log.append(message)
 
+    # check if the log is up to date
     def candidateLogUpToDate(self, lastLogIndex, lastLogTerm):
         if self.getLastLogTerm() < lastLogTerm:
             return True
@@ -306,6 +311,7 @@ class Raft:
         else:
             return False
 
+    # get the term of the last log entry
     def getLastLogTerm(self):
         try:
             last = self.log[len(self.log) - 1]['term']
@@ -313,8 +319,10 @@ class Raft:
         except IndexError:
             return 0
 
+    # get index of the last log entry
     def getLastLogIndex(self):
         return len(self.log)
+
 
 
 if __name__ == "__main__":
