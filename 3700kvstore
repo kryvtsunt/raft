@@ -249,7 +249,7 @@ class Raft:
 
     def get_log(self):
         log = []
-        for i in range(50,0,-1):
+        for i in range(100,0,-1):
             if (len(self.log)<i):
                 continue
             log.append(self.log[len(self.log)-i])
